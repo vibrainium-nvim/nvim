@@ -29,6 +29,7 @@ class RpcSession {
   final Map<int, Completer<Object?>> _pending = {};
   int _nextMsgId = 1;
   StreamSubscription<List<int>>? _sub;
+  Future<void>? _notificationQueue;
 
   RpcRequestHandler? onRequest;
   RpcNotificationHandler? onNotification;
@@ -85,12 +86,29 @@ class RpcSession {
       } else if (type == 2 && msg.length >= 3) {
         final method = msg[1] as String;
         final params = (msg[2] as List?)?.cast<Object?>() ?? const <Object?>[];
-        final handler = onNotification;
-        if (handler != null) {
-          Future.sync(() => handler(method, params));
-        }
+        _enqueueNotification(method, params);
       }
     }
+  }
+
+  void _enqueueNotification(String method, List<Object?> params) {
+    final prev = _notificationQueue;
+    final next = (prev ?? Future<void>.value()).then(
+      (_) => _handleNotification(method, params),
+      onError: (_) => _handleNotification(method, params),
+    );
+    _notificationQueue = next;
+  }
+
+  Future<void> _handleNotification(
+    String method,
+    List<Object?> params,
+  ) async {
+    final handler = onNotification;
+    if (handler == null) return;
+    try {
+      await handler(method, params);
+    } catch (_) {}
   }
 
   Future<void> _handleRequest(

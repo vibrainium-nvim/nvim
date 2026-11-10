@@ -52,7 +52,7 @@ void main() {
 
     test('MsgpackStreamDecoder handles fragmented chunks', () {
       final msg1 = MsgpackCodec.encode([0, 1, 'nvim_get_current_win', <Object?>[]]);
-      final msg2 = MsgpackCodec.encode([2, 'viff_action', ['toggle']]);
+      final msg2 = MsgpackCodec.encode([2, 'vibrainium_action', ['toggle']]);
       final combined = Uint8List.fromList([...msg1, ...msg2]);
 
       final decoder = MsgpackStreamDecoder();
@@ -62,7 +62,7 @@ void main() {
       final part2 = decoder.addChunk(combined.sublist(5));
       expect(part2, hasLength(2));
       expect(part2[0], [0, 1, 'nvim_get_current_win', <Object?>[]]);
-      expect(part2[1], [2, 'viff_action', ['toggle']]);
+      expect(part2[1], [2, 'vibrainium_action', ['toggle']]);
     });
   });
 }
