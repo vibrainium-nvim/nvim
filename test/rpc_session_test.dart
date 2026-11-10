@@ -338,5 +338,236 @@ void main() {
       await aToB.close();
       await bToA.close();
     });
+
+    test('supports multi-item rows, prefix, displayLabel, mouse click routing, and keyboard navigation', () async {
+      final aToB = StreamController<List<int>>();
+      final bToA = StreamController<List<int>>();
+
+      final sessionA = RpcSession(
+        input: bToA.stream,
+        output: (Uint8List bytes) => aToB.add(bytes),
+      );
+      final sessionB = RpcSession(
+        input: aToB.stream,
+        output: (Uint8List bytes) => bToA.add(bytes),
+      );
+
+      var nextBuf = 10;
+      var nextWin = 20;
+      final bufLines = <int, List<String>>{};
+      final bufOptions = <int, Map<String, Object?>>{};
+      final bufKeymaps = <int, Map<String, String>>{};
+      final winCursors = <int, (int, int)>{};
+      final validWins = <int>{};
+
+      sessionB.onRequest = (method, params) async {
+        switch (method) {
+          case 'nvim_create_buf':
+            final b = nextBuf++;
+            bufLines[b] = [];
+            bufOptions[b] = {};
+            bufKeymaps[b] = {};
+            return b;
+          case 'nvim_buf_set_lines':
+            final b = params[0] as int;
+            final l = (params[4] as List).cast<String>();
+            bufLines[b] = l;
+            return null;
+          case 'nvim_buf_set_option':
+            final b = params[0] as int;
+            final opt = params[1] as String;
+            bufOptions[b] ??= {};
+            bufOptions[b]![opt] = params[2];
+            return null;
+          case 'nvim_open_win':
+            final w = nextWin++;
+            validWins.add(w);
+            winCursors[w] = (1, 0);
+            return w;
+          case 'nvim_win_is_valid':
+            final w = params[0] as int;
+            return validWins.contains(w);
+          case 'nvim_win_close':
+            final w = params[0] as int;
+            validWins.remove(w);
+            return null;
+          case 'nvim_buf_set_keymap':
+            final b = params[0] as int;
+            final lhs = params[2] as String;
+            final rhs = params[3] as String;
+            bufKeymaps[b] ??= {};
+            bufKeymaps[b]![lhs] = rhs;
+            return null;
+          case 'nvim_exec_lua':
+            return null;
+          case 'nvim_win_set_option':
+            return null;
+          case 'nvim_win_set_cursor':
+            final w = params[0] as int;
+            final pos = params[1] as List;
+            winCursors[w] = (pos[0] as int, pos[1] as int);
+            return null;
+          case 'nvim_win_get_cursor':
+            final w = params[0] as int;
+            final cur = winCursors[w] ?? (1, 0);
+            return [cur.$1, cur.$2];
+          case 'nvim_command':
+            return null;
+          default:
+            return null;
+        }
+      };
+
+      final nvim = Nvim(sessionA);
+      final menu = NvimContextMenu<NvimContextMenuItem>(
+        nvim: nvim,
+        actionPrefix: 'test_menu',
+        filetype: 'vibrainium-test-menu',
+        augroupName: 'TestCompactMenu',
+      );
+
+      var selectedLabel = '';
+      final rows = [
+        NvimContextMenuRow<NvimContextMenuItem>(
+          [
+            NvimContextMenuItem(
+              label: 'Open Externally',
+              displayLabel: 'Open',
+              shortcut: 'o',
+              onSelect: () async {
+                selectedLabel = 'Open Externally';
+              },
+            ),
+            NvimContextMenuItem(
+              label: 'Reveal in Finder',
+              displayLabel: 'In Finder',
+              shortcut: 'O',
+              onSelect: () async {
+                selectedLabel = 'Reveal in Finder';
+              },
+            ),
+          ],
+        ),
+        NvimContextMenuRow<NvimContextMenuItem>.single(
+          NvimContextMenuItem(
+            label: 'Search',
+            shortcut: '/',
+            onSelect: () async {
+              selectedLabel = 'Search';
+            },
+          ),
+        ),
+        NvimContextMenuRow<NvimContextMenuItem>(
+          [
+            NvimContextMenuItem(
+              label: 'Copy Filename',
+              displayLabel: 'Name',
+              shortcut: 'y',
+              onSelect: () async {
+                selectedLabel = 'Copy Filename';
+              },
+            ),
+            NvimContextMenuItem(
+              label: 'Copy Relative Path',
+              displayLabel: 'Rel Path',
+              shortcut: 'Y',
+              onSelect: () async {
+                selectedLabel = 'Copy Relative Path';
+              },
+            ),
+            NvimContextMenuItem(
+              label: 'Copy Absolute Path',
+              displayLabel: 'Abs',
+              shortcut: 'gy',
+              onSelect: () async {
+                selectedLabel = 'Copy Absolute Path';
+              },
+            ),
+          ],
+          prefix: 'Copy: ',
+        ),
+      ];
+
+      await menu.openMenu(rows: rows);
+      expect(menu.isOpen, isTrue);
+      expect(menu.items.length, 6);
+      expect(menu.rows.length, 3);
+      expect(menu.rowIndexWhere((it) => it.label == 'Search'), 1);
+      expect(menu.rowIndexWhere((it) => it.label == 'Copy Absolute Path'), 2);
+
+      final menuBuf = menu.bufferId!;
+      final lines = bufLines[menuBuf]!;
+      expect(lines.length, 3);
+      expect(lines[0], contains('Open (o) │ In Finder (O)'));
+      expect(lines[1], contains('Search'));
+      expect(lines[1], contains('/'));
+      expect(lines[2], contains('Copy: Name (y) │ Rel Path (Y) │ Abs (gy)'));
+
+      // Check keymaps: shortcut keys mapped to index
+      expect(bufKeymaps[menuBuf]!['o'], contains('test_menu.menu_select:0'));
+      expect(bufKeymaps[menuBuf]!['O'], contains('test_menu.menu_select:1'));
+      expect(bufKeymaps[menuBuf]!['/'], contains('test_menu.menu_select:2'));
+      expect(bufKeymaps[menuBuf]!['y'], contains('test_menu.menu_select:3'));
+      expect(bufKeymaps[menuBuf]!['Y'], contains('test_menu.menu_select:4'));
+      expect(bufKeymaps[menuBuf]!['gy'], contains('test_menu.menu_select:5'));
+      expect(bufKeymaps[menuBuf]!['<Tab>'], contains('test_menu.menu_tab'));
+      expect(bufKeymaps[menuBuf]!['<S-Tab>'], contains('test_menu.menu_stab'));
+
+      // Test mouse click column routing on multi-item row:
+      // Clicking row 3 (line 3, 1-based) near col 5 should pick 'Copy Filename'
+      await menu.handleClick(
+        mousePos: MousePosition(
+          winId: menu.windowId!,
+          winRow: 3,
+          winCol: 8,
+          line: 3,
+          column: 8,
+          screenRow: 3,
+          screenCol: 8,
+        ),
+      );
+      expect(selectedLabel, 'Copy Filename');
+      expect(menu.isOpen, isFalse);
+
+      // Re-open and click the 3rd item in row 3 ('Abs')
+      await menu.openMenu(rows: rows);
+      await menu.handleClick(
+        mousePos: MousePosition(
+          winId: menu.windowId!,
+          winRow: 3,
+          winCol: 36,
+          line: 3,
+          column: 36,
+          screenRow: 3,
+          screenCol: 36,
+        ),
+      );
+      expect(selectedLabel, 'Copy Absolute Path');
+
+      // Re-open and test tab navigation across items and rows
+      await menu.openMenu(rows: rows);
+      final win = menu.windowId!;
+      winCursors[win] = (1, 1); // Focused on 'Open'
+      await menu.handleTab(true);
+      expect(winCursors[win]!.$1, 1);
+      expect(winCursors[win]!.$2, greaterThan(1)); // Focused on 'In Finder'
+
+      // Next tab jumps to row 2 ('Search')
+      await menu.handleTab(true);
+      expect(winCursors[win]!.$1, 2);
+
+      // Next tab jumps to row 3 ('Name')
+      await menu.handleTab(true);
+      expect(winCursors[win]!.$1, 3);
+
+      // Confirm with cursor on row 3 item 0
+      await menu.confirm();
+      expect(selectedLabel, 'Copy Filename');
+
+      await sessionA.close();
+      await sessionB.close();
+      await aToB.close();
+      await bToA.close();
+    });
   });
 }
